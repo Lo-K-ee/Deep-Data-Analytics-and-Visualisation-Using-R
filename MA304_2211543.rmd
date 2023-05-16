@@ -1,0 +1,489 @@
+---
+title: "MA304_2211543"
+author: "Reg_2211543"
+subtitle: "Data Analysis of the UOF Dataset from Dallas in 2016"
+output:
+  html_document: default
+  pdf_document: default
+date: ""
+---
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+options(tibble.print_max = Inf, max.print = 100)
+############## PACKAGES ################
+
+library(tidyverse)
+library(ggrepel)
+library(tidyr)
+library(sf)
+library(geojsonsf)
+library(rgdal)
+library(Rcpp)
+library(ggmap)
+library(leaflet)
+library(gridExtra)
+library(plotly)
+library(readr)
+library(knitr)
+library(kableExtra)
+
+############## DATA FETCH #################
+
+setwd("C:/Files/UoE/Modules/Spring/MA304-7-SP Data Visualisation")
+data_304 <- read.csv("37-00049_UOF-P_2016_prepped.csv")
+
+############## DATA MANIPULATION ################
+
+data_304 <- data_304[-c(1), ] # removing first row as it repeats the title
+data_304$INCIDENT_TIME = format(strptime(data_304$INCIDENT_TIME, "%I:%M:%S %p"), format="%H:%M:%S") # converting the 12hr timeformat to 24hr format
+data_304$INCIDENT_TIME = as.POSIXct(data_304$INCIDENT_TIME, format="%H:%M:%S") # converting the text into datetime format 
+data_304$houroftheday = cut(data_304$INCIDENT_TIME, breaks="1 hour") #getting the hour of the day and storing it in a new column
+data_304$day <- weekdays(as.Date(data_304$INCIDENT_DATE, format= "%m/%d/%y")) #getting the days and creating a new column as day
+data_304$day <- ordered(data_304$day, levels= c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")) #defining the order of days
+data_304$month <- months(as.Date(data_304$INCIDENT_DATE, format = "%m/%d/%y")) #getting the months and creating a new column as month
+data_304$month <- ordered(data_304$month, levels= c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"))
+data_304$INCIDENT_DATE <- as.Date(data_304$INCIDENT_DATE, format = "%m/%d/%Y") #converting the date in %m/%d/%y format 
+data_304$INCIDENT_DATE <- gsub("00", "20",data_304$INCIDENT_DATE) #as the year has 0016, converting substituting them with "20"
+data_304$INCIDENT_DATE <- as.Date(data_304$INCIDENT_DATE, format = "%Y-%m-%d") #seperating the dates with -
+data_304$monthnum <- format(data_304$INCIDENT_DATE, "%m") #months in number
+data_304$OFFICER_YEARS_ON_FORCE <- as.numeric(data_304$OFFICER_YEARS_ON_FORCE)
+
+# Grouping years, months and days
+
+years_dat <- data_304 %>%
+  group_by(date = INCIDENT_DATE, month, day) %>%
+  summarize(counts = n())
+
+months_dat <- data_304 %>%
+  group_by(month = (format(data_304$INCIDENT_DATE, "%m"))) %>%
+  summarize(counts = n())
+
+days_dat <- data_304 %>%
+  group_by(day = wday(data_304$INCIDENT_DATE, label = TRUE)) %>%
+  summarize(counts = n())
+
+hours_dat <- data_304 %>%
+  group_by(hour=(hour(data_304$houroftheday))) %>%
+  summarize(average = n())
+
+```
+
+## Introduction
+
+This report aims to perform a full data visualisation and presents *comprehensive analysis* on the Use of Force (UOF) dataset from Dallas, Texas. The UOF dataset possesses information on the incidents where law enforcement officers used force against individuals during encounters, including details on the dates, location, officer and subject details, injuries sustained and other relevant information related to UOF incidents in 2016.
+
+The purpose is to provide valuable insights with various trends and patterns in the form of tables, graphs and plots to gain a better understanding of the factors associated with the dataset. We will also explore the relationships between the variables, visualise trends, perform exploratory analysis to deliver the gained insights to a broader audience. I'll be focusing particularly on the issue of racial bias by examining the dataset that may shed light on why the **black people were represented as perpetrators of crimes.**
+
+### Proportions of Incident Reasons by Subject's Race
+
+Starting off with the tables that depicts the proportion of incidents per subject's race. The incident reasons include a variety of different reasons such as arrest, traffic stops, warrant execution, etc. The most number of events are occured for **Black** and **Hispanic subjects**. Particularly the common reasons for the incidents on Black subjects were arrest and service calls. The incidents on Hispanic subjects were mostly the same as black subjects. We also have other racial subjects with majorly arrests as the main reason for incidents.
+
+We can interpret from the counts that the cases are most among the black subjects and the table also explains the relative frequency of incidents across different races.
+
+```{r twowaytable, echo=FALSE, warning=FALSE,message=FALSE, fig.width=10}
+
+# creating a df with subject race and reason
+SubjPerRace <- data_304 %>%
+  group_by(SUBJECT_RACE, INCIDENT_REASON) %>%
+  summarise(Counts = n()) %>% 
+  mutate(Percentage = sprintf("%.2f%%", Counts / sum(Counts)*100)) %>%
+  filter(SUBJECT_RACE != "NULL")
+
+# presenting the table using KableExtra
+SubjPerRace %>%
+  kbl() %>%
+  kable_classic(full_width = F, html_font = "Cambria", position = "left")
+
+
+```
+
+### Scatter plot of Racial Disparities with number of incidents
+
+The following plot shows the relation between the officers' race and the subjects'. Each point in the plot shows the combination of officer and subject race with the size representing the number of incidents, the labels are added for better justification of incident counts. As we can see that the most force used on black subjects was by the white officers. This can provide insights into the potential **racial disparities** in the use of force by law enforcement. Comparatively, the crimes committed by the *black subjects* are way more than all other races collectively. We can also observe that white police make up the bulk in the departments, thus its no wonder why the treatment of black subjects is the way it is.
+
+```{r dotplot, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=9}
+
+# creating a df with Officer race and subject Race
+OffiSubjRace <- data_304 %>%
+  count(OFFICER_RACE,SUBJECT_RACE) %>%
+  filter(SUBJECT_RACE != "NULL", SUBJECT_RACE != "Other")
+
+# plotting the dot plot
+ggplot(OffiSubjRace, aes(OFFICER_RACE, SUBJECT_RACE, size = n)) + 
+  geom_point(color = "red") +
+  geom_text(aes(label=n), vjust = 2) +
+  labs(title = "Officer's race vs Subject's", x = "Officer's Race", y = "Subject's Race", size = "n") +
+  theme(legend.position = "none")
+
+```
+
+### Racial Distribution by Gender
+
+The following Pie charts represents the percentage of *male and female subjects of each races*. In the first one, each slice of the chart shows the percentage of male subjects with the label representing the exact numbers and following by the female subjects in the second one.
+
+The pies of the subject's race says it all, that most of the crimes are by the black subjects, followed by the hispanic subjects in males. Even when considering the female subjects, the majority crimes are by the black subjects and also some of the white subjects. Proportionately, the amount of subjects doesn't differ much in terms of the *gender*.
+
+```{r SubGenRace, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+############# PIE CHART (Gender~Race) ####################
+
+# creating a df with subject gender and subject race
+subgender_race <- data_304 %>%
+  filter(SUBJECT_RACE != "NULL", SUBJECT_GENDER != "Unknown", SUBJECT_GENDER != "NULL") %>%
+  group_by(SUBJECT_GENDER, SUBJECT_RACE) %>%
+  summarize(counts = n())
+
+# creating the plot and storing it in variables
+spie_M <- subgender_race %>%
+  filter(SUBJECT_GENDER == "Male") %>%
+  ggplot(aes(x="", y=counts, fill=SUBJECT_RACE)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  geom_label_repel(aes(x = 1, label = paste0(counts)), nudge_x = 0.8, size = 4, show.legend = FALSE, box.padding = 1) +
+  labs(title = "Male Subject's Race", fill = "Race") +
+  scale_fill_brewer(palette = "Set1") +
+  theme_void() 
+
+spie_F <- subgender_race %>%
+  filter(SUBJECT_GENDER == "Female") %>%
+  ggplot(aes(x="", y=counts, fill=SUBJECT_RACE)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  geom_label_repel(aes(x = 1, label = paste0(counts)), nudge_x = 0.8, size = 4, show.legend = FALSE, box.padding = 1) +
+  labs(title = "Female Subject's Race", fill = "Race") +
+  scale_fill_brewer(palette = "Set1") +
+  theme_void()
+
+# presenting them parallely using grid.arrange() with 2 rows and 1 cols
+grid.arrange(spie_M, spie_F, nrow=2, ncol=1)
+
+```
+
+Now, presenting the charts that depicts the distibution of *Officer race by gender*. Each pie's size in the chart is proportional to the count of officers of that race. The color of the charts explains the race of officers. 
+
+When it comes to the races of the officers in the department, the white people dominates the crowd. The number of white officers is higher than the other races in the entire population in both the gender. The American Indians are the least to be in the police department. The percentage of the black officers is more in famale compared to the male.
+
+```{r OfcrGenRace, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+# creating a df with Officer gender and Officer race
+ofcrgender_race <- data_304 %>%
+  filter(OFFICER_RACE != "NULL", OFFICER_GENDER != "Unknown", OFFICER_GENDER != "NULL") %>%
+  group_by(OFFICER_GENDER, OFFICER_RACE) %>%
+  summarize(counts = n())
+  
+# creating the plot and storing it in variables
+opie_M <- ofcrgender_race %>%
+  filter(OFFICER_GENDER == "Male") %>%
+  ggplot(aes(x="", y=counts, fill=OFFICER_RACE)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  geom_label_repel(aes(x = 1, label = paste0(counts)), nudge_x = 0.8, size = 4, show.legend = FALSE, box.padding = 1) +
+  labs(title = "Male Officer's Race", fill = "Race") +
+  scale_fill_brewer(palette = "Set1") +
+  theme_void() 
+
+opie_F <- ofcrgender_race %>%
+  filter(OFFICER_GENDER == "Female") %>%
+  ggplot(aes(x="", y=counts, fill=OFFICER_RACE)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  geom_label_repel(aes(x = 1, label = paste0(counts)), nudge_x = 0.8, size = 4, show.legend = FALSE, box.padding = 1) +
+  labs(title = "Female Officer's Race", fill = "Race") +
+  scale_fill_brewer(palette = "Set1") +
+  theme_void()
+
+# presenting them parallely using grid.arrange() with 2 rows and 1 cols
+grid.arrange(opie_M, opie_F, nrow=2, ncol=1)
+
+```
+
+### Crime Rates in Dallas
+
+The histogram at the left shows the overall crime rates in *Dallas divided by divisions*. It can be observed that the highest number of crimes are from the central division followed by the Northeast and the Southeast regions. The least number of crimes was reported from the **Northwest division**. The histogram at the right shows the crimes committed by the black subjects. Maximum reports were from the Central followed by the South Central divisions. The lowest number of crimes committed by black subjects is from Northwest division. 
+
+We can interpret from the plot that most of the cases were from the Central division area of the county. As we comprehend further the number of black subjects crimes in the county, more than half the other subjects crimes were committed by the black subjects, which strongly supports our point earlier in this report.
+
+```{r hist, echo=FALSE, warning=FALSE,message=FALSE, fig.height=8, fig.width=10}
+
+# creating a df with divisions of dallas and counts of crimes
+crimePerLoc1 <- table(data_304$DIVISION)
+crimePerLoc1 <- as.data.frame(crimePerLoc1)
+hist1 <- crimePerLoc1 %>%
+  ggplot(aes(Var1, Freq, group = 1)) + 
+    geom_histogram(stat = "identity", fill = "lightblue", color = "black", bins = 5) +
+    xlab("Division in Dallas") + ggtitle("Overall crime rates in Dallas") + ylab("crime counts") +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+    geom_text(aes(label = Freq), vjust = -0.5)
+
+crimePerLoc <- data_304 %>%
+  filter(SUBJECT_RACE != "NULL") %>%
+  group_by(DIVISION, SUBJECT_RACE) %>%
+  summarize(counts = n())
+
+# creating a df with divisions of dallas only with black subjects and counts of crimes
+black_data <- crimePerLoc %>% filter(SUBJECT_RACE == "Black")
+hist2 <- ggplot(black_data, aes(x=DIVISION, y=counts, fill = DIVISION)) +
+  geom_histogram(data=black_data, aes(fill = "Black"), stat = "identity", alpha = 0.7, fill = "black", color = "#ff7e76") +
+  labs(title = "Crime counts by black subjects", x="Division in Dallas", y ="crime counts") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  geom_text(aes(label = counts), vjust = -0.5)
+
+grid.arrange(hist1, hist2, nrow=1, ncol=2)
+
+```
+
+### Crime Patterns in Dallas over the year
+
+The following box plots explore the patterns of different factors on crime occurrences in Dallas.
+
+The first box plot shows the distribution of the counts of *crime in Dallas* based on the subject's Race. The plot compares the crime occurrences with the subject's race, which are the boxes, and the **black subjects** has the highest median comparing to all other races. The plot tells that the American Indians & the Asians are the least crime committing races. The White and Hispanic subjects are quite moderate in terms of their crime rate. 
+
+```{r boxplo, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+# creating boxplot with subject's race
+box1 <- ggplot(crimePerLoc, aes(x = SUBJECT_RACE, y = counts, fill = SUBJECT_RACE)) +
+  geom_boxplot() +
+  labs(x="Subject Race", y="crime counts", title="Crime occurrences per subject's race")
+
+box1
+```
+
+As the black subjects are dominating in Dallas with their crimes, I wanted to take a deeper look on their level of misdeeds, So presenting a plot of black subjects in specific and their crime levels over the year. This compares the monthly average incident amount, denoted by the boxes, with the  months in the x-axis. The rates varies over the year and can also spot some outliers in the black subjects plot.
+
+From the plot, we can infer that the crimes are *on the rise* at the **beginning of the year** which slowly depreciates over months and slightly inclines around may and September. The amount of offenses is significantly *lower* at the *end of the year* than it was at the beginning. Altogether these plots, provide insights to a better extent and will be much helpful for the law enforcement agencies to understand and identify the crime rates and deploy suitable resources at the right time to reduce the crime rates. 
+
+```{r boxplo2, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+# creating a df with only black subjects crimes over the year
+black_reason <- data_304 %>%
+  filter(SUBJECT_RACE == "Black") %>%
+  group_by(INCIDENT_DATE, Months = monthnum, SUBJECT_RACE) %>%
+  summarize(average = n())
+
+# presenting it using boxplot
+box2 <- ggplot(black_reason, aes(x = Months, y=average, fill = Months)) +
+  geom_boxplot() +
+  labs(title = "Incident rate across black subjects in 2016", y = " Incident rate") +
+  scale_x_discrete(labels= c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")) +
+  theme(legend.position = "none")
+
+box2
+```
+
+### Correlation Analysis
+
+This analysis explores the relationship between the Incident reason and the reason for force charged on the subjects. Calculating its *correlation value*, which is **+0.25**, we can say that there is a positive correlation between the two. From the value we interpret that they have a moderate correlation, indicating that the increase in Incident reason increased the reason of force. 
+
+To visually explore the relation, a scatterplot has also been plotted using the values. This gives the association between the Reason of force applied for the Incident Reason. Each point denotes a different scenario, with Incident reason in x-axis and the Reason of force in y-axis. The plot shows that the cluster of points in area, indicates certain **reasons for force** on the particular subject due to an underlying **incident reason**. Mostly the reason behind the force was that the subject *resisting Arrest* and the least time was due to an *Accidental Discharge* in the concern of danger to self or others. 
+
+```{r corr, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+# performing correlationg analysis
+correlation <- cor(as.numeric(as.factor(data_304$INCIDENT_REASON)), as.numeric(as.factor(data_304$REASON_FOR_FORCE)))
+cat("Correlation between incident reason & reason for force:", correlation)
+
+############## SCATTER PLOT ####################
+data_304 %>%
+  filter(INCIDENT_REASON != "NULL", REASON_FOR_FORCE != "NULL") %>%
+  ggplot(aes(x = as.factor(INCIDENT_REASON), y = as.factor(REASON_FOR_FORCE))) +
+  geom_point() +
+  labs(x="Incident Reason", y="Reason for Force", title="Scatter plot between Incident Reason & Reason for Force") + 
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+```
+
+### Time Series Analysis
+
+The plot consists of three line graphs denoting the occurrences of crimes over different time period.
+
+The first plot depicts the *hourly crime rate in Dallas*, with counts in y-axis and the hour of the day in x-axis. The frequency of crimes is highest in the *late evenings and early morning* till 6 am. Gradually the amount of crimes decreases over the day time and inclines after 3 pm. 
+
+The second plot shows the *daily frequency of crimes* with Day in x-axis and crime counts in y-axis. The funny thing is that the most frequent of crimes happens at the weekends and consistent on the weekdays. The number of cases begin to incline on Wednesdays and improves over the weekend and abruptly decreases to the lowest level on Mondays.
+
+
+```{r timeSer1, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+# performing the time series analysis with the dataframe we created earlier
+timeplot1 <- ggplot(data = subset(hours_dat, !is.na(hour)), aes(x=hour, y=average)) + 
+  geom_line(linewidth = 1, color = "indianred") +
+  labs(x = "Hour of the day", y = "Crimes", title = "Hourly Crime rate")
+timeplot2 <- ggplot(days_dat, aes(x=day, y=counts, group=1)) +
+  geom_line(linewidth = 1, color = "blue") +
+  labs(x = "Day", y = "Crimes", title = "Daily Crime rate") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+grid.arrange(timeplot1, timeplot2, ncol = 2, nrow = 1)
+
+```
+
+The final plot is the *amount of crimes over the year* marked every month. As the plot represents the crime rates opens around 220 in January, slowly increases till March then decreases a bit gradually till July and achieves an amount of 200, then entirely goes down to 100 or less than that at the end of the year. The frequencies are at its peak in winter months.
+
+```{r timeSer2, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+timeplot3 <- ggplot(months_dat, aes(month, counts, group=1)) +
+  geom_line(linewidth = 1, color = "green") +
+  scale_x_discrete(labels= c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")) +
+  labs(x = "Month", y = "Crimes", title = "Monthly Crime rate") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+timeplot3
+
+```
+
+This graph also represents the *crimes over the year but marks every single day* in a month, so we can gain insights even more deeper, with months in x-axis and crime counts in y-axis. As the lines are so irregular, smoothing them using *geom_smooth*, which helps to interpret it easily. The number of crimes peaks in a day of October 2016. This suggests that there may be some seasonal variation in the occurrences of crimes. We can't be sure that this pattern repeats every year, because we only possess an year on data.
+
+```{r smoothing, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+############# Smoothing pattern/trend ##################
+
+pattern <- ggplot(years_dat, aes(date, counts)) +
+  geom_line(size = 1, col = "bisque3") +
+  geom_smooth(method = "loess", color = "blue3", span = 1/4, size = 1.2) +
+  labs(title = "Occurence of Crimes over the year", x = "Months", y = "Crimes") +
+  theme_minimal()
+pattern
+
+```
+
+### Crime zones in Dallas
+
+This graph shows the map of Dallas and the corresponding crimes zones marked in the county using the latitudes and longitudes. The crime data has been filtered to focus on the Black subjects committing crimes around the city. As you can see the *orange* dots which represents the crimes committed by **black subjects** and the blue dots depicting the remaining subjects. The size of the points denotes the number of incidents at that particular location. The amount of crimes committed by the black subjects is *higher* when compared to the crimes collectively committed by other subjects.
+
+```{r dallasmap, echo=FALSE, warning=FALSE,message=FALSE, fig.height=8, fig.width=9}
+
+# creating a static map and marking the points appropriately
+latitude <- 32.774959
+longitude <- -96.802976
+gleft <- longitude - 0.3
+gbottom <- latitude - 0.2
+gright <- longitude + 0.3
+gtop <- latitude + 0.2
+
+bbox <- c(gleft,gbottom,gright,gtop)
+map <- get_stamenmap(bbox, zoom = 11)
+dallas_map <- ggmap(map)
+
+crimeAreaBlack <- data_304%>%
+  group_by(SUBJECT_RACE, LOCATION_LONGITUDE, LOCATION_LATITUDE) %>%
+  filter(SUBJECT_RACE == "Black")
+
+dallas_map +
+  geom_point(aes(x = as.numeric(data_304$LOCATION_LONGITUDE), y = as.numeric(data_304$LOCATION_LATITUDE), size = 1, alpha = 0.6, color = "Remaining subjects"), data = data_304) +
+  geom_point(aes(x = as.numeric(crimeAreaBlack$LOCATION_LONGITUDE), y = as.numeric(crimeAreaBlack$LOCATION_LATITUDE), size = 1, alpha = 0.6, color = "Black subjects"), data = crimeAreaBlack) +
+  labs(title = "Crime zones in Dallas", x = "Longitude", y = "Latitude") +
+  theme(legend.position = "bottom")
+
+```
+
+### Officers' injury and their Experience in years
+
+The plot shows the relation between the *officer's year of experience* in the department and their amount of injuries. The x-axis represents the number of years of experience the officers have and the y-axis depicts the number of injuries the officers suffered over the year during their career. The graph illustrates that officers with less years of experience have higher instance of injury and the vice versa with the experienced officers. This could be due to *multiple factors* like, the candidates with **fewer experience** are more like vulnerable and mostly have less exposure on the crime scenarios. 
+
+```{r injury, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+# creating a df with officer injury and their years of experience
+
+ofcr_expr <- data_304 %>%
+  filter(OFFICER_INJURY == "Yes") %>%
+  arrange(OFFICER_YEARS_ON_FORCE) %>%
+  group_by(OFFICER_YEARS_ON_FORCE, OFFICER_INJURY) %>%
+  summarise(counts = n())
+  
+ofcr_expr_no <- data_304 %>%
+  filter(OFFICER_INJURY == "No") %>%
+  arrange(OFFICER_YEARS_ON_FORCE) %>%
+  group_by(OFFICER_YEARS_ON_FORCE, OFFICER_INJURY) %>%
+  summarise(counts = n())
+
+#plotting them
+ggplot(ofcr_expr, aes(x = OFFICER_YEARS_ON_FORCE, y = counts)) +
+  geom_path(linewidth = 0.7 ,col = "grey") +
+  geom_point(size=2, col="brown") +
+  #geom_text(aes(label= counts), size=3, vjust=2, hjust=1) +
+  labs(x = "Officer Years of Service", y = "No.Of.Injuries") +
+  ggtitle("Officers' amount of injuries with their years of experience")
+
+
+```
+
+
+### Majority Type of Force1 used on Subjects
+
+The plot shows the majority type of force1 used on criminals, which is divided by race and gender, respectively, to examine any force applied based on prejudice. As we can see that for both male and female subjects, the majority of type1 used force is *"Verbal Command"*, followed by the *"Weapon display at person"*. The least extreme action taken only on a *black subject* was *"OC Spray"*. From the graph we can clearly see that the actions were mostly taken on black subjects, which means that they can be so dangerous. Further investigation describes that the male subjects are most likely to experience *"Take Down - Arm"*, which is absent among female subjects. 
+
+
+```{r force1, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+# creating a df with SUBJECT_RACE, SUBJECT_GENDER and TYPE_OF_FORCE_USED1
+data_mod_Force1 <- data_304 %>%
+  filter(SUBJECT_RACE != "NULL", SUBJECT_GENDER != "Unknown", SUBJECT_GENDER != "NULL", TYPE_OF_FORCE_USED1 != "NULL") %>%
+  group_by(SUBJECT_RACE, SUBJECT_GENDER, TYPE_OF_FORCE_USED1) %>%
+  summarise(counts = n()) %>%
+  filter(counts>=10)
+
+#colors to differenctiate the histogram
+colorsvec <- c("#ffff00", "#FFC300", "#FF5733", "#C70039", "#900C3F", "#581845", "#2E4057", "#5D6D7E", "#E74C3C", "#8E44AD", "#3498DB", "#1ABC9C", "#16A085", "#27AE60", "#F1C40F", "#F39C12", "#D35400")
+
+#plotting the histogram
+data_mod_Force1 %>% 
+  ggplot(aes(x = SUBJECT_RACE, y = counts,  fill = TYPE_OF_FORCE_USED1)) +
+  geom_bar(position = "stack", stat = "identity") +
+  facet_wrap(~ SUBJECT_GENDER, nrow = 1) +
+  scale_fill_manual(values = colorsvec) +
+  labs(x = "Subject Race", y = "Counts", fill = "Use of Force 1") +
+  ggtitle("Majority Type of Force1 used on Subjects") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+```
+
+The plot shows the majority type of force1 used by Officers, which is divided by race and gender, respectively, to understand which force will be applied for the first time by each officer in terms of their races and gender. Seemingly, they begin by *"Verbal command"*, that's why its common with all the officers. A rare action which was only carried out by the **White Officers** was *"Feet/Leg/Knee Strike"*, which they applied on criminals who might have refused to surrender. In terms of the counts, we can confirm that most of the forces are applied by the white officers.
+
+```{r force2, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+data_ofcr_Force1 <- data_304 %>%
+  filter(OFFICER_RACE != "NULL", OFFICER_RACE != "Other", OFFICER_GENDER != "Unknown", OFFICER_GENDER != "NULL", TYPE_OF_FORCE_USED1 != "NULL") %>%
+  group_by(OFFICER_RACE, OFFICER_GENDER, TYPE_OF_FORCE_USED1) %>%
+  summarise(counts = n()) %>%
+  filter(counts>=10)
+
+data_ofcr_Force1 %>% 
+  ggplot(aes(x = OFFICER_RACE, y = counts,  fill = TYPE_OF_FORCE_USED1)) +
+  geom_bar(position = "stack", stat = "identity") +
+  facet_wrap(~ OFFICER_GENDER, nrow = 1) +
+  scale_fill_manual(values = colorsvec) +
+  labs(x = "Officer Race", y = "Counts", fill = "Use of Force 1") +
+  ggtitle("Majority Type of Force1 used by the officers") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+```
+
+### Subject Description per race
+
+This interactive plot has been deployed using *plotly*, which shows the description of subjects along with their race. The plot displays the condition of the subject when the force was applied, along with their corresponding races. The size and color of the markers represents the number of subjects falling under each description. From the plot we can observe that the **most cases** were among the *black subjects* with majority of the description *"Mentally Unstable"*, followed by the *"Unknown"* status.
+
+```{r interacpl, echo=FALSE, warning=FALSE,message=FALSE, fig.height=7, fig.width=8}
+
+# interactive plots of SUBJECT_RACE and SUBJECT_DESCRIPTION using plotly
+
+subject_desc <- data_304 %>%
+  filter(SUBJECT_RACE != "NULL", SUBJECT_RACE != "Other", SUBJECT_DESCRIPTION != "NULL") %>%
+  group_by(SUBJECT_RACE, subject_desc = SUBJECT_DESCRIPTION) %>%
+  summarize(counts = n())
+
+plot_ly(subject_desc, x = ~SUBJECT_RACE, y = ~subject_desc, text = ~counts, type = "scatter", mode = "markers", color = ~counts, 
+        colors = "YlOrRd", marker = list(size = ~counts/5, opacity = 0.5)) %>%
+          layout(title = "Description of the subject with race",
+          xaxis = list(title = "SUBJECT_RACE"),
+          yaxis = list(title = "SUBJECT_DESCRIPTION"))
+
+```
+
+### Conclusion
+
+Based on the analysis of this policing data set with the use of force in Dallas, Texas, its evident that there are **disparities** in the way the police treat the individuals based on their *race* and *gender*. Also we can confirm through the plots we presented, that, the Black individuals were subjected to the use of force at a **higher rate** compared to white individuals, which makes them as **perpetrators of crimes**. Moreover the Male subjects were involved in the use of force than Female subjects. The data also showed that the police with more experience, had never got injured than the one with lesser experience.
+
+In conclusion, the analysis of this data suggests that there is a need for further research to address disparities in use of force practices to individuals based on their gender and race. Also we should take some measures to reduce the crime rates by deploying more resources on suitable places and time periods.  
+
+### References
+
+Center for Policing Equity (2020). Data Science for Good: Center for Policing Equity - Police Data Initiative (Version 1.0) [Data set]. Kaggle. https://www.kaggle.com/center-for-policing-equity/data-science-for-good
